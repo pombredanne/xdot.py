@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # The purpose of this script is to enable uploading xdot.py to the Python
 # Package Index, which can be easily done by doing:
@@ -7,7 +7,7 @@
 #   python setup.py sdist upload
 #
 # See also:
-# - https://code.google.com/p/jrfonseca/issues/detail?id=19
+# - https://code.google.com/archive/p/jrfonseca/issues/19
 # - http://docs.python.org/2/distutils/packageindex.html
 #
 
@@ -15,7 +15,7 @@ from setuptools import setup
 
 setup(
     name='xdot',
-    version='0.6',
+    version='0.7',
     author='Jose Fonseca',
     author_email='jose.r.fonseca@gmail.com',
     url='https://github.com/jrfonseca/xdot.py',

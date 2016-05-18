@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-# Copyright 2008 Jose Fonseca
+# Copyright 2008-2015 Jose Fonseca
 #
 # This program is free software: you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as published
@@ -30,13 +30,18 @@ import time
 import re
 import optparse
 
-import gobject
-import gtk
-import gtk.gdk
-import gtk.keysyms
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0')
+
+from gi.repository import GLib
+from gi.repository import GObject
+from gi.repository import Gtk
+from gi.repository import Gdk
+from gi.repository import GdkPixbuf
+from gi.repository import Pango
+from gi.repository import PangoCairo
 import cairo
-import pango
-import pangocairo
 
 
 # See http://www.graphviz.org/pub/scm/graphviz-cairo/plugin/cairo/gvrender_cairo.c
@@ -56,6 +61,14 @@ class Pen:
         self.linewidth = 1.0
         self.fontsize = 14.0
         self.fontname = "Times-Roman"
+        self.bold = False
+        self.italic = False
+        self.underline = False
+        self.superscript = False
+        self.subscript = False
+        self.strikethrough = False
+        self.overline = False
+
         self.dash = ()
 
     def copy(self):
@@ -102,16 +115,16 @@ class TextShape(Shape):
         self.pen = pen.copy()
         self.x = x
         self.y = y
-        self.j = j
-        self.w = w
-        self.t = t
+        self.j = j  # Centering
+        self.w = w  # width
+        self.t = t  # text
 
     def draw(self, cr, highlight=False):
 
         try:
             layout = self.layout
         except AttributeError:
-            layout = cr.create_layout()
+            layout = PangoCairo.create_layout(cr)
 
             # set font options
             # see http://lists.freedesktop.org/archives/cairo/2007-February/009688.html
@@ -121,31 +134,56 @@ class TextShape(Shape):
             fo.set_hint_style(cairo.HINT_STYLE_NONE)
             fo.set_hint_metrics(cairo.HINT_METRICS_OFF)
             try:
-                pangocairo.context_set_font_options(context, fo)
+                PangoCairo.context_set_font_options(context, fo)
             except TypeError:
                 # XXX: Some broken pangocairo bindings show the error
                 # 'TypeError: font_options must be a cairo.FontOptions or None'
                 pass
+            except KeyError:
+                # cairo.FontOptions is not registered as a foreign struct in older PyGObject versions.
+                # https://git.gnome.org/browse/pygobject/commit/?id=b21f66d2a399b8c9a36a1758107b7bdff0ec8eaa
+                pass
 
             # set font
-            font = pango.FontDescription()
+            font = Pango.FontDescription()
+
+            # https://developer.gnome.org/pango/stable/PangoMarkupFormat.html
+            markup = GObject.markup_escape_text(self.t)
+            if self.pen.bold:
+                markup = '<b>' + markup + '</b>'
+            if self.pen.italic:
+                markup = '<i>' + markup + '</i>'
+            if self.pen.underline:
+                markup = '<span underline="single">' + markup + '</span>'
+            if self.pen.strikethrough:
+                markup = '<s>' + markup + '</s>'
+            if self.pen.superscript:
+                markup = '<sup><small>' + markup + '</small></sup>'
+            if self.pen.subscript:
+                markup = '<sub><small>' + markup + '</small></sub>'
+
+            success, attrs, text, accel_char = Pango.parse_markup(markup, -1, '\x00')
+            assert success
+            layout.set_attributes(attrs)
+
             font.set_family(self.pen.fontname)
-            font.set_absolute_size(self.pen.fontsize*pango.SCALE)
+            font.set_absolute_size(self.pen.fontsize*Pango.SCALE)
             layout.set_font_description(font)
 
             # set text
-            layout.set_text(self.t)
+            layout.set_text(text, -1)
 
             # cache it
             self.layout = layout
         else:
-            cr.update_layout(layout)
+            PangoCairo.update_layout(cr, layout)
 
         descent = 2 # XXX get descender from font metrics
 
         width, height = layout.get_size()
-        width = float(width)/pango.SCALE
-        height = float(height)/pango.SCALE
+        width = float(width)/Pango.SCALE
+        height = float(height)/Pango.SCALE
+
         # we know the width that dot thinks this text should have
         # we do not necessarily have a font with the same metrics
         # scale it so that the text fits inside its box
@@ -173,7 +211,7 @@ class TextShape(Shape):
         cr.save()
         cr.scale(f, f)
         cr.set_source_rgba(*self.select_pen(highlight).color)
-        cr.show_layout(layout)
+        PangoCairo.show_layout(cr, layout)
         cr.restore()
 
         if 0: # DEBUG
@@ -205,15 +243,14 @@ class ImageShape(Shape):
         self.path = path
 
     def draw(self, cr, highlight=False):
-        cr2 = gtk.gdk.CairoContext(cr)
-        pixbuf = gtk.gdk.pixbuf_new_from_file(self.path)
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file(self.path)
         sx = float(self.w)/float(pixbuf.get_width())
         sy = float(self.h)/float(pixbuf.get_height())
         cr.save()
         cr.translate(self.x0, self.y0 - self.h)
         cr.scale(sx, sy)
-        cr2.set_source_pixbuf(pixbuf, 0, 0)
-        cr2.paint()
+        Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+        cr.paint()
         cr.restore()
 
 
@@ -302,7 +339,7 @@ class BezierShape(Shape):
     def draw(self, cr, highlight=False):
         x0, y0 = self.points[0]
         cr.move_to(x0, y0)
-        for i in xrange(1, len(self.points), 3):
+        for i in range(1, len(self.points), 3):
             x1, y1 = self.points[i]
             x2, y2 = self.points[i + 1]
             x3, y3 = self.points[i + 2]
@@ -473,7 +510,9 @@ class Graph(Shape):
         for shape in self.shapes:
             shape.draw(cr)
         for edge in self.edges:
-            edge.draw(cr, highlight=(edge in highlight_items))
+            should_highlight = any(e in highlight_items
+                                   for e in (edge, edge.src, edge.dst))
+            edge.draw(cr, highlight=should_highlight)
         for node in self.nodes:
             node.draw(cr, highlight=(node in highlight_items))
 
@@ -510,6 +549,7 @@ UNDERLINE = 4
 SUPERSCRIPT = 8
 SUBSCRIPT = 16
 STRIKE_THROUGH = 32
+OVERLINE = 64
 
 
 class XDotAttrParser:
@@ -526,16 +566,20 @@ class XDotAttrParser:
         self.pen = Pen()
         self.shapes = []
 
-    def __nonzero__(self):
+    def __bool__(self):
         return self.pos < len(self.buf)
 
     def read_code(self):
-        pos = self.buf.find(" ", self.pos)
+        pos = self.buf.find(b" ", self.pos)
         res = self.buf[self.pos:pos]
         self.pos = pos + 1
-        while self.pos < len(self.buf) and self.buf[self.pos].isspace():
-            self.pos += 1
+        self.skip_space()
+        res = res.decode('utf-8')
         return res
+
+    def skip_space(self):
+        while self.pos < len(self.buf) and self.buf[self.pos : self.pos + 1].isspace():
+            self.pos += 1
 
     def read_int(self):
         return int(self.read_code())
@@ -550,11 +594,11 @@ class XDotAttrParser:
 
     def read_text(self):
         num = self.read_int()
-        pos = self.buf.find("-", self.pos) + 1
+        pos = self.buf.find(b"-", self.pos) + 1
         self.pos = pos + num
         res = self.buf[pos:self.pos]
-        while self.pos < len(self.buf) and self.buf[self.pos].isspace():
-            self.pos += 1
+        self.skip_space()
+        res = res.decode('utf-8')
         return res
 
     def read_polygon(self):
@@ -585,7 +629,7 @@ class XDotAttrParser:
             r, g, b = colorsys.hsv_to_rgb(h, s, v)
             a = 1.0
             return r, g, b, a
-        elif c1 == "[":
+        elif c1 == "[" or c1 == "(":
             sys.stderr.write('warning: color gradients not supported yet\n')
             return None
         else:
@@ -593,7 +637,7 @@ class XDotAttrParser:
 
     def lookup_color(self, c):
         try:
-            color = gtk.gdk.color_parse(c)
+            color = Gdk.color_parse(c)
         except ValueError:
             pass
         else:
@@ -717,9 +761,15 @@ class XDotAttrParser:
         self.pen.fontname = name
 
     def handle_font_characteristics(self, flags):
-        # TODO
-        if flags != 0:
-            sys.stderr.write("warning: font characteristics not supported yet\n")
+        self.pen.bold = bool(flags & BOLD)
+        self.pen.italic = bool(flags & ITALIC)
+        self.pen.underline = bool(flags & UNDERLINE)
+        self.pen.superscript = bool(flags & SUPERSCRIPT)
+        self.pen.subscript = bool(flags & SUBSCRIPT)
+        self.pen.strikethrough = bool(flags & STRIKE_THROUGH)
+        self.pen.overline = bool(flags & OVERLINE)
+        if self.pen.overline:
+            sys.stderr.write('warning: overlined text not supported yet\n')
 
     def handle_text(self, x, y, j, w, t):
         self.shapes.append(TextShape(self.pen, x, y, j, w, t))
@@ -779,13 +829,13 @@ class Scanner:
         if self.ignorecase:
             flags |= re.IGNORECASE
         self.tokens_re = re.compile(
-            '|'.join(['(' + regexp + ')' for type, regexp, test_lit in self.tokens]),
+            b'|'.join([b'(' + regexp + b')' for type, regexp, test_lit in self.tokens]),
              flags
         )
 
     def next(self, buf, pos):
         if pos >= len(buf):
-            return EOF, '', pos
+            return EOF, b'', pos
         mo = self.tokens_re.match(buf, pos)
         if mo:
             text = mo.group()
@@ -795,7 +845,7 @@ class Scanner:
                 type = self.literals.get(text, type)
             return type, text, pos
         else:
-            c = buf[pos]
+            c = buf[pos : pos + 1]
             return self.symbols.get(c, None), c, pos + 1
 
 
@@ -814,7 +864,7 @@ class Lexer:
     scanner = None
     tabsize = 8
 
-    newline_re = re.compile(r'\r\n?|\n')
+    newline_re = re.compile(br'\r\n?|\n')
 
     def __init__(self, buf = None, pos = 0, filename = None, fp = None):
         if fp is not None:
@@ -833,7 +883,7 @@ class Lexer:
                     buf = mmap.mmap(fileno, length, access = mmap.ACCESS_READ)
                     pos = os.lseek(fileno, 0, 1)
                 else:
-                    buf = ''
+                    buf = b''
                     pos = 0
 
             if filename is None:
@@ -848,7 +898,7 @@ class Lexer:
         self.col = 1
         self.filename = filename
 
-    def next(self):
+    def __next__(self):
         while True:
             # save state
             pos = self.pos
@@ -856,6 +906,7 @@ class Lexer:
             col = self.col
 
             type, text, endpos = self.scanner.next(self.buf, pos)
+            assert isinstance(text, bytes)
             assert pos + len(text) == endpos
             self.consume(text)
             type, text = self.filter(type, text)
@@ -864,11 +915,7 @@ class Lexer:
             if type == SKIP:
                 continue
             elif type is None:
-                msg = 'unexpected char '
-                if text >= ' ' and text <= '~':
-                    msg += "'%s'" % text
-                else:
-                    msg += "0x%X" % ord(text)
+                msg = 'unexpected char %r' % (text,)
                 raise ParseError(msg, self.filename, line, col)
             else:
                 break
@@ -884,7 +931,7 @@ class Lexer:
 
         # update column number
         while True:
-            tabpos = text.find('\t', pos)
+            tabpos = text.find(b'\t', pos)
             if tabpos == -1:
                 break
             self.col += tabpos - pos
@@ -897,7 +944,7 @@ class Parser:
 
     def __init__(self, lexer):
         self.lexer = lexer
-        self.lookahead = self.lexer.next()
+        self.lookahead = next(self.lexer)
 
     def match(self, type):
         if self.lookahead.type != type:
@@ -909,11 +956,17 @@ class Parser:
 
     def skip(self, type):
         while self.lookahead.type != type:
+            if self.lookahead.type == EOF:
+                raise ParseError(
+                   msg = 'unexpected end of file',
+                   filename = self.lexer.filename,
+                   line = self.lookahead.line,
+                   col = self.lookahead.col)
             self.consume()
 
     def consume(self):
         token = self.lookahead
-        self.lookahead = self.lexer.next()
+        self.lookahead = next(self.lexer)
         return token
 
 
@@ -946,49 +999,49 @@ class DotScanner(Scanner):
     tokens = [
         # whitespace and comments
         (SKIP,
-            r'[ \t\f\r\n\v]+|'
-            r'//[^\r\n]*|'
-            r'/\*.*?\*/|'
-            r'#[^\r\n]*',
+            br'[ \t\f\r\n\v]+|'
+            br'//[^\r\n]*|'
+            br'/\*.*?\*/|'
+            br'#[^\r\n]*',
         False),
 
         # Alphanumeric IDs
-        (ID, r'[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*', True),
+        (ID, br'[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*', True),
 
         # Numeric IDs
-        (ID, r'-?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)', False),
+        (ID, br'-?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)', False),
 
         # String IDs
-        (STR_ID, r'"[^"\\]*(?:\\.[^"\\]*)*"', False),
+        (STR_ID, br'"[^"\\]*(?:\\.[^"\\]*)*"', False),
 
         # HTML IDs
-        (HTML_ID, r'<[^<>]*(?:<[^<>]*>[^<>]*)*>', False),
+        (HTML_ID, br'<[^<>]*(?:<[^<>]*>[^<>]*)*>', False),
 
         # Edge operators
-        (EDGE_OP, r'-[>-]', False),
+        (EDGE_OP, br'-[>-]', False),
     ]
 
     # symbol table
     symbols = {
-        '[': LSQUARE,
-        ']': RSQUARE,
-        '{': LCURLY,
-        '}': RCURLY,
-        ',': COMMA,
-        ':': COLON,
-        ';': SEMI,
-        '=': EQUAL,
-        '+': PLUS,
+        b'[': LSQUARE,
+        b']': RSQUARE,
+        b'{': LCURLY,
+        b'}': RCURLY,
+        b',': COMMA,
+        b':': COLON,
+        b';': SEMI,
+        b'=': EQUAL,
+        b'+': PLUS,
     }
 
     # literal table
     literals = {
-        'strict': STRICT,
-        'graph': GRAPH,
-        'digraph': DIGRAPH,
-        'node': NODE,
-        'edge': EDGE,
-        'subgraph': SUBGRAPH,
+        b'strict': STRICT,
+        b'graph': GRAPH,
+        b'digraph': DIGRAPH,
+        b'node': NODE,
+        b'edge': EDGE,
+        b'subgraph': SUBGRAPH,
     }
 
     ignorecase = True
@@ -1004,12 +1057,12 @@ class DotLexer(Lexer):
             text = text[1:-1]
 
             # line continuations
-            text = text.replace('\\\r\n', '')
-            text = text.replace('\\\r', '')
-            text = text.replace('\\\n', '')
+            text = text.replace(b'\\\r\n', b'')
+            text = text.replace(b'\\\r', b'')
+            text = text.replace(b'\\\n', b'')
             
             # quotes
-            text = text.replace('\\"', '"')
+            text = text.replace(b'\\"', b'"')
 
             # layout engines recognize other escape codes (many non-standard)
             # but we don't translate them here
@@ -1097,6 +1150,7 @@ class DotParser(Parser):
             self.consume()
             while self.lookahead.type != RSQUARE:
                 name, value = self.parse_attr()
+                name = name.decode('utf-8')
                 attrs[name] = value
                 if self.lookahead.type == COMMA:
                     self.consume()
@@ -1109,7 +1163,7 @@ class DotParser(Parser):
             self.consume()
             value = self.parse_id()
         else:
-            value = 'true'
+            value = b'true'
         return name, value
 
     def parse_node_id(self):
@@ -1146,7 +1200,7 @@ class DotParser(Parser):
 
 class XDotParser(DotParser):
 
-    XDOTVERSION = '1.6'
+    XDOTVERSION = '1.7'
 
     def __init__(self, xdotcode):
         lexer = DotLexer(buf = xdotcode)
@@ -1157,6 +1211,8 @@ class XDotParser(DotParser):
         self.shapes = []
         self.node_by_name = {}
         self.top_graph = True
+        self.width = 0
+        self.height = 0
 
     def handle_graph(self, attrs):
         if self.top_graph:
@@ -1176,7 +1232,7 @@ class XDotParser(DotParser):
                 return
 
             if bb:
-                xmin, ymin, xmax, ymax = map(float, bb.split(","))
+                xmin, ymin, xmax, ymax = map(float, bb.split(b","))
 
                 self.xoffset = -xmin
                 self.yoffset = -ymax
@@ -1233,17 +1289,16 @@ class XDotParser(DotParser):
 
     def parse(self):
         DotParser.parse(self)
-
         return Graph(self.width, self.height, self.shapes, self.nodes, self.edges)
 
     def parse_node_pos(self, pos):
-        x, y = pos.split(",")
+        x, y = pos.split(b",")
         return self.transform(float(x), float(y))
 
     def parse_edge_pos(self, pos):
         points = []
-        for entry in pos.split(' '):
-            fields = entry.split(',')
+        for entry in pos.split(b' '):
+            fields = entry.split(b',')
             try:
                 x, y = fields
             except ValueError:
@@ -1269,16 +1324,26 @@ class Animation(object):
         self.timeout_id = None
 
     def start(self):
-        self.timeout_id = gobject.timeout_add(int(self.step * 1000), self.tick)
+        self.timeout_id = GLib.timeout_add(int(self.step * 1000), self.__real_tick)
 
     def stop(self):
         self.dot_widget.animation = NoAnimation(self.dot_widget)
         if self.timeout_id is not None:
-            gobject.source_remove(self.timeout_id)
+            GLib.source_remove(self.timeout_id)
             self.timeout_id = None
 
+    def __real_tick(self):
+        try:
+            if not self.tick():
+                self.stop()
+                return False
+        except e:
+            self.stop()
+            raise e
+        return True
+
     def tick(self):
-        self.stop()
+        return False
 
 
 class NoAnimation(Animation):
@@ -1362,7 +1427,7 @@ class DragAction(object):
 
     def on_motion_notify(self, event):
         if event.is_hint:
-            x, y, state = event.window.get_pointer()
+            window, x, y, state = event.window.get_device_position(event.device)
         else:
             x, y, state = event.x, event.y, event.state
         deltax = self.prevmousex - x
@@ -1396,7 +1461,7 @@ class NullAction(DragAction):
 
     def on_motion_notify(self, event):
         if event.is_hint:
-            x, y, state = event.window.get_pointer()
+            window, x, y, state = event.window.get_device_position(event.device)
         else:
             x, y, state = event.x, event.y, event.state
         dot_widget = self.dot_widget
@@ -1404,17 +1469,17 @@ class NullAction(DragAction):
         if item is None:
             item = dot_widget.get_jump(x, y)
         if item is not None:
-            dot_widget.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.HAND2))
+            dot_widget.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
             dot_widget.set_highlight(item.highlight)
         else:
-            dot_widget.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.ARROW))
+            dot_widget.get_window().set_cursor(None)
             dot_widget.set_highlight(None)
 
 
 class PanAction(DragAction):
 
     def start(self):
-        self.dot_widget.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.FLEUR))
+        self.dot_widget.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.FLEUR))
 
     def drag(self, deltax, deltay):
         self.dot_widget.x += deltax / self.dot_widget.zoom_ratio
@@ -1422,7 +1487,7 @@ class PanAction(DragAction):
         self.dot_widget.queue_draw()
 
     def stop(self):
-        self.dot_widget.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.ARROW))
+        self.dot_widget.get_window().set_cursor(None)
 
     abort = stop
 
@@ -1469,28 +1534,33 @@ class ZoomAreaAction(DragAction):
         self.dot_widget.queue_draw()
 
 
-class DotWidget(gtk.DrawingArea):
-    """PyGTK widget that draws dot graphs."""
+class DotWidget(Gtk.DrawingArea):
+    """GTK widget that draws dot graphs."""
 
+    #TODO GTK3: Second argument has to be of type Gdk.EventButton instead of object.
     __gsignals__ = {
-        'expose-event': 'override',
-        'clicked' : (gobject.SIGNAL_RUN_LAST, gobject.TYPE_NONE, (gobject.TYPE_STRING, gtk.gdk.Event))
+        'clicked' : (GObject.SIGNAL_RUN_LAST, None, (str, object)),
+        'error' : (GObject.SIGNAL_RUN_LAST, None, (str,))
     }
 
     filter = 'dot'
 
     def __init__(self):
-        gtk.DrawingArea.__init__(self)
+        Gtk.DrawingArea.__init__(self)
 
         self.graph = Graph()
         self.openfilename = None
 
-        self.set_flags(gtk.CAN_FOCUS)
+        self.set_can_focus(True)
 
-        self.add_events(gtk.gdk.BUTTON_PRESS_MASK | gtk.gdk.BUTTON_RELEASE_MASK)
+        self.connect("draw", self.on_draw)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
         self.connect("button-press-event", self.on_area_button_press)
         self.connect("button-release-event", self.on_area_button_release)
-        self.add_events(gtk.gdk.POINTER_MOTION_MASK | gtk.gdk.POINTER_MOTION_HINT_MASK | gtk.gdk.BUTTON_RELEASE_MASK)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | 
+                        Gdk.EventMask.POINTER_MOTION_HINT_MASK | 
+                        Gdk.EventMask.BUTTON_RELEASE_MASK | 
+                        Gdk.EventMask.SCROLL_MASK)
         self.connect("motion-notify-event", self.on_area_motion_notify)
         self.connect("scroll-event", self.on_area_scroll_event)
         self.connect("size-allocate", self.on_area_size_allocate)
@@ -1498,7 +1568,7 @@ class DotWidget(gtk.DrawingArea):
         self.connect('key-press-event', self.on_key_press_event)
         self.last_mtime = None
 
-        gobject.timeout_add(1000, self.update)
+        GLib.timeout_add(1000, self.update)
 
         self.x, self.y = 0.0, 0.0
         self.zoom_ratio = 1.0
@@ -1507,6 +1577,10 @@ class DotWidget(gtk.DrawingArea):
         self.drag_action = NullAction(self)
         self.presstime = None
         self.highlight = None
+        self.highlight_search = False
+
+    def error_dialog(self, message):
+        self.emit('error', message)
 
     def set_filter(self, filter):
         self.filter = filter
@@ -1521,7 +1595,7 @@ class DotWidget(gtk.DrawingArea):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
-                universal_newlines=True
+                universal_newlines=False
             )
         except OSError as exc:
             error = '%s: %s' % (self.filter, exc.strerror)
@@ -1529,33 +1603,25 @@ class DotWidget(gtk.DrawingArea):
         else:
             xdotcode, error = p.communicate(dotcode)
         error = error.rstrip()
-        sys.stderr.write(error + '\n')
+        if error:
+            error = error.decode()
+            sys.stderr.write(error + '\n')
         if p.returncode != 0:
-            dialog = gtk.MessageDialog(type=gtk.MESSAGE_ERROR,
-                                       message_format=error,
-                                       buttons=gtk.BUTTONS_OK)
-            dialog.set_title('Dot Viewer')
-            dialog.run()
-            dialog.destroy()
+            self.error_dialog(error)
             return None
         return xdotcode
 
     def set_dotcode(self, dotcode, filename=None):
         self.openfilename = None
-        if isinstance(dotcode, unicode):
-            dotcode = dotcode.encode('utf8')
+        if isinstance(dotcode, str):
+            dotcode = dotcode.encode('utf-8')
         xdotcode = self.run_filter(dotcode)
         if xdotcode is None:
             return False
         try:
             self.set_xdotcode(xdotcode)
         except ParseError as ex:
-            dialog = gtk.MessageDialog(type=gtk.MESSAGE_ERROR,
-                                       message_format=str(ex),
-                                       buttons=gtk.BUTTONS_OK)
-            dialog.set_title('Dot Viewer')
-            dialog.run()
-            dialog.destroy()
+            self.error_dialog(str(ex))
             return False
         else:
             if filename is None:
@@ -1566,6 +1632,7 @@ class DotWidget(gtk.DrawingArea):
             return True
 
     def set_xdotcode(self, xdotcode):
+        assert isinstance(xdotcode, bytes)
         parser = XDotParser(xdotcode)
         self.graph = parser.parse()
         self.zoom_image(self.zoom_ratio, center=True)
@@ -1573,7 +1640,7 @@ class DotWidget(gtk.DrawingArea):
     def reload(self):
         if self.openfilename is not None:
             try:
-                fp = file(self.openfilename, 'rt')
+                fp = open(self.openfilename, 'rt')
                 self.set_dotcode(fp.read(), self.openfilename)
                 fp.close()
             except IOError:
@@ -1587,16 +1654,7 @@ class DotWidget(gtk.DrawingArea):
                 self.reload()
         return True
 
-    def do_expose_event(self, event):
-        cr = self.window.cairo_create()
-
-        # set a clip region for the expose event
-        cr.rectangle(
-            event.area.x, event.area.y,
-            event.area.width, event.area.height
-        )
-        cr.clip()
-
+    def on_draw(self, widget, cr):
         cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
         cr.paint()
 
@@ -1621,7 +1679,13 @@ class DotWidget(gtk.DrawingArea):
         self.y = y
         self.queue_draw()
 
-    def set_highlight(self, items):
+    def set_highlight(self, items, search=False):
+        # Enable or disable search highlight
+        if search:
+            self.highlight_search = items is not None
+        # Ignore cursor highlight while searching
+        if self.highlight_search and not search:
+            return
         if self.highlight != items:
             self.highlight = items
             self.queue_draw()
@@ -1692,59 +1756,59 @@ class DotWidget(gtk.DrawingArea):
     POS_INCREMENT = 100
 
     def on_key_press_event(self, widget, event):
-        if event.keyval == gtk.keysyms.Left:
+        if event.keyval == Gdk.KEY_Left:
             self.x -= self.POS_INCREMENT/self.zoom_ratio
             self.queue_draw()
             return True
-        if event.keyval == gtk.keysyms.Right:
+        if event.keyval == Gdk.KEY_Right:
             self.x += self.POS_INCREMENT/self.zoom_ratio
             self.queue_draw()
             return True
-        if event.keyval == gtk.keysyms.Up:
+        if event.keyval == Gdk.KEY_Up:
             self.y -= self.POS_INCREMENT/self.zoom_ratio
             self.queue_draw()
             return True
-        if event.keyval == gtk.keysyms.Down:
+        if event.keyval == Gdk.KEY_Down:
             self.y += self.POS_INCREMENT/self.zoom_ratio
             self.queue_draw()
             return True
-        if event.keyval in (gtk.keysyms.Page_Up,
-                            gtk.keysyms.plus,
-                            gtk.keysyms.equal,
-                            gtk.keysyms.KP_Add):
+        if event.keyval in (Gdk.KEY_Page_Up,
+                            Gdk.KEY_plus,
+                            Gdk.KEY_equal,
+                            Gdk.KEY_KP_Add):
             self.zoom_image(self.zoom_ratio * self.ZOOM_INCREMENT)
             self.queue_draw()
             return True
-        if event.keyval in (gtk.keysyms.Page_Down,
-                            gtk.keysyms.minus,
-                            gtk.keysyms.KP_Subtract):
+        if event.keyval in (Gdk.KEY_Page_Down,
+                            Gdk.KEY_minus,
+                            Gdk.KEY_KP_Subtract):
             self.zoom_image(self.zoom_ratio / self.ZOOM_INCREMENT)
             self.queue_draw()
             return True
-        if event.keyval == gtk.keysyms.Escape:
+        if event.keyval == Gdk.KEY_Escape:
             self.drag_action.abort()
             self.drag_action = NullAction(self)
             return True
-        if event.keyval == gtk.keysyms.r:
+        if event.keyval == Gdk.KEY_r:
             self.reload()
             return True
-        if event.keyval == gtk.keysyms.f:
+        if event.keyval == Gdk.KEY_f:
             win = widget.get_toplevel()
             find_toolitem = win.uimanager.get_widget('/ToolBar/Find')
             textentry = find_toolitem.get_children()
             win.set_focus(textentry[0])
             return True
-        if event.keyval == gtk.keysyms.q:
-            gtk.main_quit()
+        if event.keyval == Gdk.KEY_q:
+            Gtk.main_quit()
             return True
-        if event.keyval == gtk.keysyms.p:
+        if event.keyval == Gdk.KEY_p:
             self.on_print()
             return True
         return False
 
     print_settings = None
     def on_print(self, action=None):
-        print_op = gtk.PrintOperation()
+        print_op = Gtk.PrintOperation()
 
         if self.print_settings != None:
             print_op.set_print_settings(self.print_settings)
@@ -1752,10 +1816,9 @@ class DotWidget(gtk.DrawingArea):
         print_op.connect("begin_print", self.begin_print)
         print_op.connect("draw_page", self.draw_page)
 
-        res = print_op.run(gtk.PRINT_OPERATION_ACTION_PRINT_DIALOG, self.parent.parent)
-
-        if res == gtk.PRINT_OPERATION_RESULT_APPLY:
-            print_settings = print_op.get_print_settings()
+        res = print_op.run(Gtk.PrintOperationAction.PRINT_DIALOG, self.get_toplevel())
+        if res == Gtk.PrintOperationResult.APPLY:
+            self.print_settings = print_op.get_print_settings()
 
     def begin_print(self, operation, context):
         operation.set_n_pages(1)
@@ -1774,9 +1837,10 @@ class DotWidget(gtk.DrawingArea):
     def get_drag_action(self, event):
         state = event.state
         if event.button in (1, 2): # left or middle button
-            if state & gtk.gdk.CONTROL_MASK:
+            modifiers = Gtk.accelerator_get_default_mod_mask()
+            if state & modifiers == Gdk.ModifierType.CONTROL_MASK:
                 return ZoomAction
-            elif state & gtk.gdk.SHIFT_MASK:
+            elif state & modifiers == Gdk.ModifierType.SHIFT_MASK:
                 return ZoomAreaAction
             else:
                 return PanAction
@@ -1794,7 +1858,7 @@ class DotWidget(gtk.DrawingArea):
         return False
 
     def is_click(self, event, click_fuzz=4, click_timeout=1.0):
-        assert event.type == gtk.gdk.BUTTON_RELEASE
+        assert event.type == Gdk.EventType.BUTTON_RELEASE
         if self.presstime is None:
             # got a button release without seeing the press?
             return False
@@ -1823,7 +1887,7 @@ class DotWidget(gtk.DrawingArea):
             if event.button == 1:
                 url = self.get_url(x, y)
                 if url is not None:
-                    self.emit('clicked', unicode(url.url), event)
+                    self.emit('clicked', url.url, event)
                 else:
                     jump = self.get_jump(x, y)
                     if jump is not None:
@@ -1836,11 +1900,11 @@ class DotWidget(gtk.DrawingArea):
         return False
 
     def on_area_scroll_event(self, area, event):
-        if event.direction == gtk.gdk.SCROLL_UP:
+        if event.direction == Gdk.ScrollDirection.UP:
             self.zoom_image(self.zoom_ratio * self.ZOOM_INCREMENT,
                             pos=(event.x, event.y))
             return True
-        if event.direction == gtk.gdk.SCROLL_DOWN:
+        if event.direction == Gdk.ScrollDirection.DOWN:
             self.zoom_image(self.zoom_ratio / self.ZOOM_INCREMENT,
                             pos=(event.x, event.y))
             return True
@@ -1881,15 +1945,14 @@ class DotWidget(gtk.DrawingArea):
         return self.graph.get_jump(x, y)
 
 
-class FindMenuToolAction(gtk.Action):
+class FindMenuToolAction(Gtk.Action):
     __gtype_name__ = "FindMenuToolAction"
 
-    def __init__(self, *args, **kw):
-        gtk.Action.__init__(self, *args, **kw)
-        self.set_tool_item_type(gtk.ToolItem)
+    def do_create_tool_item(self):
+        return Gtk.ToolItem()
 
 
-class DotWindow(gtk.Window):
+class DotWindow(Gtk.Window):
 
     ui = '''
     <ui>
@@ -1910,40 +1973,41 @@ class DotWindow(gtk.Window):
 
     base_title = 'Dot Viewer'
 
-    def __init__(self, widget=None):
-        gtk.Window.__init__(self)
+    def __init__(self, widget=None, width=512, height=512):
+        Gtk.Window.__init__(self)
 
         self.graph = Graph()
 
         window = self
 
         window.set_title(self.base_title)
-        window.set_default_size(512, 512)
-        vbox = gtk.VBox()
+        window.set_default_size(width, height)
+        vbox = Gtk.VBox()
         window.add(vbox)
 
-        self.widget = widget or DotWidget()
+        self.dotwidget = widget or DotWidget()
+        self.dotwidget.connect("error", lambda e, m: self.error_dialog(m))
 
         # Create a UIManager instance
-        uimanager = self.uimanager = gtk.UIManager()
+        uimanager = self.uimanager = Gtk.UIManager()
 
         # Add the accelerator group to the toplevel window
         accelgroup = uimanager.get_accel_group()
         window.add_accel_group(accelgroup)
 
         # Create an ActionGroup
-        actiongroup = gtk.ActionGroup('Actions')
+        actiongroup = Gtk.ActionGroup('Actions')
         self.actiongroup = actiongroup
 
         # Create actions
         actiongroup.add_actions((
-            ('Open', gtk.STOCK_OPEN, None, None, None, self.on_open),
-            ('Reload', gtk.STOCK_REFRESH, None, None, None, self.on_reload),
-            ('Print', gtk.STOCK_PRINT, None, None, "Prints the currently visible part of the graph", self.widget.on_print),
-            ('ZoomIn', gtk.STOCK_ZOOM_IN, None, None, None, self.widget.on_zoom_in),
-            ('ZoomOut', gtk.STOCK_ZOOM_OUT, None, None, None, self.widget.on_zoom_out),
-            ('ZoomFit', gtk.STOCK_ZOOM_FIT, None, None, None, self.widget.on_zoom_fit),
-            ('Zoom100', gtk.STOCK_ZOOM_100, None, None, None, self.widget.on_zoom_100),
+            ('Open', Gtk.STOCK_OPEN, None, None, None, self.on_open),
+            ('Reload', Gtk.STOCK_REFRESH, None, None, None, self.on_reload),
+            ('Print', Gtk.STOCK_PRINT, None, None, "Prints the currently visible part of the graph", self.dotwidget.on_print),
+            ('ZoomIn', Gtk.STOCK_ZOOM_IN, None, None, None, self.dotwidget.on_zoom_in),
+            ('ZoomOut', Gtk.STOCK_ZOOM_OUT, None, None, None, self.dotwidget.on_zoom_out),
+            ('ZoomFit', Gtk.STOCK_ZOOM_FIT, None, None, None, self.dotwidget.on_zoom_fit),
+            ('Zoom100', Gtk.STOCK_ZOOM_100, None, None, None, self.dotwidget.on_zoom_100),
         ))
 
         find_action = FindMenuToolAction("Find", None,
@@ -1958,18 +2022,18 @@ class DotWindow(gtk.Window):
 
         # Create a Toolbar
         toolbar = uimanager.get_widget('/ToolBar')
-        vbox.pack_start(toolbar, False)
+        vbox.pack_start(toolbar, False, False, 0)
 
-        vbox.pack_start(self.widget)
+        vbox.pack_start(self.dotwidget, True, True, 0)
 
         self.last_open_dir = "."
 
-        self.set_focus(self.widget)
+        self.set_focus(self.dotwidget)
 
         # Add Find text search
         find_toolitem = uimanager.get_widget('/ToolBar/Find')
-        self.textentry = gtk.Entry(max=20)
-        self.textentry.set_icon_from_stock(0, gtk.STOCK_FIND)
+        self.textentry = Gtk.Entry(max_length=20)
+        self.textentry.set_icon_from_stock(0, Gtk.STOCK_FIND)
         find_toolitem.add(self.textentry)
 
         self.textentry.set_activates_default(True)
@@ -1980,47 +2044,47 @@ class DotWindow(gtk.Window):
 
     def find_text(self, entry_text):
         found_items = []
-        dot_widget = self.widget
+        dot_widget = self.dotwidget
         regexp = re.compile(entry_text)
-        for node in dot_widget.graph.nodes:
-            if node.search_text(regexp):
-                found_items.append(node)
+        for element in dot_widget.graph.nodes + dot_widget.graph.edges:
+            if element.search_text(regexp):
+                found_items.append(element)
         return found_items
 
     def textentry_changed(self, widget, entry):
         entry_text = entry.get_text()
-        dot_widget = self.widget        
+        dot_widget = self.dotwidget        
         if not entry_text:
-            dot_widget.set_highlight(None)
+            dot_widget.set_highlight(None, search=True)
             return
         
         found_items = self.find_text(entry_text)
-        dot_widget.set_highlight(found_items)
+        dot_widget.set_highlight(found_items, search=True)
 
     def textentry_activate(self, widget, entry):
         entry_text = entry.get_text()
-        dot_widget = self.widget        
+        dot_widget = self.dotwidget        
         if not entry_text:
-            dot_widget.set_highlight(None)
+            dot_widget.set_highlight(None, search=True)
             return;
         
         found_items = self.find_text(entry_text)
-        dot_widget.set_highlight(found_items)
+        dot_widget.set_highlight(found_items, search=True)
         if(len(found_items) == 1):
             dot_widget.animate_to(found_items[0].x, found_items[0].y)
 
     def set_filter(self, filter):
-        self.widget.set_filter(filter)
+        self.dotwidget.set_filter(filter)
 
     def set_dotcode(self, dotcode, filename=None):
-        if self.widget.set_dotcode(dotcode, filename):
+        if self.dotwidget.set_dotcode(dotcode, filename):
             self.update_title(filename)
-            self.widget.zoom_to_fit()
+            self.dotwidget.zoom_to_fit()
 
     def set_xdotcode(self, xdotcode, filename=None):
-        if self.widget.set_xdotcode(xdotcode):
+        if self.dotwidget.set_xdotcode(xdotcode):
             self.update_title(filename)
-            self.widget.zoom_to_fit()
+            self.dotwidget.zoom_to_fit()
         
     def update_title(self, filename=None):
         if filename is None:
@@ -2030,35 +2094,31 @@ class DotWindow(gtk.Window):
 
     def open_file(self, filename):
         try:
-            fp = file(filename, 'rt')
+            fp = open(filename, 'rt')
             self.set_dotcode(fp.read(), filename)
             fp.close()
         except IOError as ex:
-            dlg = gtk.MessageDialog(type=gtk.MESSAGE_ERROR,
-                                    message_format=str(ex),
-                                    buttons=gtk.BUTTONS_OK)
-            dlg.set_title(self.base_title)
-            dlg.run()
-            dlg.destroy()
+            self.error_dialog(str(ex))
 
     def on_open(self, action):
-        chooser = gtk.FileChooserDialog(title="Open dot File",
-                                        action=gtk.FILE_CHOOSER_ACTION_OPEN,
-                                        buttons=(gtk.STOCK_CANCEL,
-                                                 gtk.RESPONSE_CANCEL,
-                                                 gtk.STOCK_OPEN,
-                                                 gtk.RESPONSE_OK))
-        chooser.set_default_response(gtk.RESPONSE_OK)
+        chooser = Gtk.FileChooserDialog(parent=self,
+                                        title="Open dot File",
+                                        action=Gtk.FileChooserAction.OPEN,
+                                        buttons=(Gtk.STOCK_CANCEL,
+                                                 Gtk.ResponseType.CANCEL,
+                                                 Gtk.STOCK_OPEN,
+                                                 Gtk.ResponseType.OK))
+        chooser.set_default_response(Gtk.ResponseType.OK)
         chooser.set_current_folder(self.last_open_dir)
-        filter = gtk.FileFilter()
+        filter = Gtk.FileFilter()
         filter.set_name("Graphviz dot files")
         filter.add_pattern("*.dot")
         chooser.add_filter(filter)
-        filter = gtk.FileFilter()
+        filter = Gtk.FileFilter()
         filter.set_name("All files")
         filter.add_pattern("*")
         chooser.add_filter(filter)
-        if chooser.run() == gtk.RESPONSE_OK:
+        if chooser.run() == Gtk.ResponseType.OK:
             filename = chooser.get_filename()
             self.last_open_dir = chooser.get_current_folder()
             chooser.destroy()
@@ -2067,7 +2127,16 @@ class DotWindow(gtk.Window):
             chooser.destroy()
 
     def on_reload(self, action):
-        self.widget.reload()
+        self.dotwidget.reload()
+
+    def error_dialog(self, message):
+        dlg = Gtk.MessageDialog(parent=self,
+                                type=Gtk.MessageType.ERROR,
+                                message_format=message,
+                                buttons=Gtk.ButtonsType.OK)
+        dlg.set_title(self.base_title)
+        dlg.run()
+        dlg.destroy()
 
 
 class OptionParser(optparse.OptionParser):
@@ -2105,23 +2174,31 @@ Shortcuts:
         '-n', '--no-filter',
         action='store_const', const=None, dest='filter',
         help='assume input is already filtered into xdot format (use e.g. dot -Txdot)')
+    parser.add_option(
+        '-g', None,
+        action='store', dest='geometry',
+        help='default window size in form WxH')
 
     (options, args) = parser.parse_args(sys.argv[1:])
     if len(args) > 1:
         parser.error('incorrect number of arguments')
 
-    win = DotWindow()
-    win.connect('destroy', gtk.main_quit)
+    width = height = 512
+    if options.geometry:
+        try:
+            width,height = (int(i) for i in options.geometry.split('x'))
+        except ValueError:
+            parser.error('invalid window geometry')
+
+    win = DotWindow(width=width, height=height)
+    win.connect('delete-event', Gtk.main_quit)
     win.set_filter(options.filter)
-    if len(args) == 0:
-        if not sys.stdin.isatty():
-            win.set_dotcode(sys.stdin.read())
-    else:
+    if len(args) >= 1:
         if args[0] == '-':
             win.set_dotcode(sys.stdin.read())
         else:
             win.open_file(args[0])
-    gtk.main()
+    Gtk.main()
 
 
 # Apache-Style Software License for ColorBrewer software and ColorBrewer Color

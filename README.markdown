@@ -3,14 +3,14 @@ About _xdot.py_
 
 _xdot.py_ is an interactive viewer for graphs written in [Graphviz](http://www.graphviz.org/)'s [dot language](http://www.graphviz.org/doc/info/lang.html).
 
-It uses internally the graphviz's [xdot output format](http://www.graphviz.org/doc/info/output.html#d:xdot) as an intermediate format, and [PyGTK](http://www.pygtk.org/) and [Cairo](http://cairographics.org/) for rendering.
+It uses internally the GraphViz's [xdot output format](http://www.graphviz.org/doc/info/output.html#d:xdot) as an intermediate format, and [PyGTK](http://www.pygtk.org/) and [Cairo](http://cairographics.org/) for rendering.
 
-_xdot.py_ can be used either as a standalone application from command line, or as a library embedded in your python application.
+_xdot.py_ can be used either as a standalone application from command line, or as a library embedded in your Python application.
 
 Status
 ======
 
-_xdot.py_ script became much more popular than I ever anticipated, and there are several interested in improving it further. However, for several years now, _xdot.py_ already meets my own needs, and unfortunately I don't have much time for maintain it myself.
+_xdot.py_ script became much more popular than I ever anticipated, and there are several interested in improving it further.  However, for several years now, _xdot.py_ already meets my own needs, and unfortunately I don't have much time for maintaing it myself.
 
 So I'm looking into transition _xdot.py_ maitenance to [others](https://github.com/jrfonseca/xdot.py/wiki/Forks): either hand over the maintenance _xdot.py_ to a community or indicate an official fork of _xdot.py_.
 
@@ -31,13 +31,11 @@ Known Issues
 
  * Not all xdot attributes are supported or correctly rendered yet. It works well for my applications but YMMV.
 
- * Text doesn't scale properly to large sizes if font hinting is enabled. I haven't find a reliable way to disable font hinting during rendering yet.
+ * Text doesn't scale properly to large sizes if font hinting is enabled. I haven't found a reliable way to disable font hinting during rendering yet.
 
 See also:
 
   * [github issue tracker](https://github.com/jrfonseca/xdot.py/issues)
-
-  * [googlecode issue tracker](https://code.google.com/p/jrfonseca/issues/list?q=xdot).
 
 Screenshots
 ===========
@@ -49,9 +47,9 @@ Screenshots
 Requirements
 ============
 
- * [Python](http://www.python.org/download/) (2.6 or 2.7)
+ * [Python 3](http://www.python.org/download/)
 
- * [PyGTK](http://www.pygtk.org/downloads.html) (2.10 or greater)
+ * [PyGObject bindings for GTK3](https://wiki.gnome.org/action/show/Projects/PyGObject)
 
  * [Graphviz](http://www.graphviz.org/Download.php)
 
@@ -62,9 +60,7 @@ Download and install:
 
  * [Python for Windows](http://www.python.org/download/)
 
- * [GTK+ Runtime for Windows](http://www.gtk.org/download/win32.php)
-
- * [PyCairo, PyGobject, and PyGTK for Windows](http://www.pygtk.org/downloads.html)
+ * [PyGObject bindings for GTK3](https://wiki.gnome.org/action/show/Projects/PyGObject)
 
  * [Graphviz for Windows](http://www.graphviz.org/Download_windows.php)
 
@@ -73,7 +69,7 @@ Debian/Ubuntu users
 
 Run:
 
-    apt-get install python-gtk2 graphviz
+    apt-get install gir1.2-gtk-3.0 python3-gi python3-gi-cairo graphviz
 
 Usage
 =====
@@ -91,6 +87,7 @@ Command Line
                             [default: dot]
       -n, --no-filter       assume input is already filtered into xdot format (use
                             e.g. dot -Txdot)
+      -g GEOMETRY           default window size in form WxH
     
     Shortcuts:
       Up, Down, Left, Right     scroll
@@ -109,7 +106,7 @@ If no input file is given then it will read the dot graph from the standard inpu
 Embedding
 ---------
 
-See included `example.py` script for an example of how to embedded _xdot.py_ into another application.
+See included `sample.py` script for an example of how to embedded _xdot.py_ into another application.
 
 [![Screenshot](https://raw.github.com/wiki/jrfonseca/xdot.py/xdot-sample_small.png)](https://raw.github.com/wiki/jrfonseca/xdot.py/xdot-sample.png)
 
@@ -127,6 +124,6 @@ Links
 
  * [ZGRViewer](http://zvtm.sourceforge.net/zgrviewer.html) -- another superb graphviz/dot viewer
 
- * [dot2tex](http://code.google.com/p/dot2tex/) -- python script to convert xdot output from Graphviz to a series of PSTricks or PGF/TikZ commands.
+ * [dot2tex](https://github.com/kjellmf/dot2tex) -- python script to convert xdot output from Graphviz to a series of PSTricks or PGF/TikZ commands.
 
  * The [pypy project](http://codespeak.net/pypy/) also includes an [interactive dot viewer based on graphviz's plain format and the pygame library](http://morepypy.blogspot.com/2008/01/visualizing-python-tokenizer.html).
